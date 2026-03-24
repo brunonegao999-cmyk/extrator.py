@@ -1,42 +1,83 @@
 import requests
+from bs4 import BeautifulSoup
 import pandas as pd
 import sys
+import re
 
 def buscar_leads_reais(nicho, data_inicio, cidade):
-    print(f"Buscando leads reais para {nicho} em {cidade}...")
+    print(f"Buscando leads reais para '{nicho}' em '{cidade}' na web...")
+    leads = []
     
-    # Esta é uma API pública que permite buscar empresas por CNAE/Cidade
-    # Estamos usando um filtro de busca por palavra-chave para facilitar
+    # Expressões regulares para achar Celular e CNPJ no meio dos textos da internet
+    regex_telefone = r'\(?\d{2}\)?\s?(?:9\d{4}|[2-9]\d{3})[-.\s]?\d{4}'
+    regex_cnpj = r'\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}'
+    
+    # Disfarça o robô como se fosse um navegador real acessando do computador
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+
+    # Busca no DuckDuckGo HTML (ótimo para scraping gratuito)
+    query = f"{nicho} {cidade} cnpj whatsapp"
+    url = f"https://html.duckduckgo.com/html/?q={query}"
+    
     try:
-        # Buscando na base do CNPJ (via Minha Receita ou BrasilAPI)
-        # Nota: Algumas APIs exigem o termo exato. Aqui vamos simular a paginação.
+        response = requests.get(url, headers=headers)
+        soup = BeautifulSoup(response.text, 'html.parser')
         
-        leads = []
-        # Simulamos a extração de uma base de dados pública real
-        # Na prática, o robô varre os registros da Receita Federal
+        # Pega todos os resultados da página
+        resultados = soup.find_all('div', class_='result__body')
         
-        url = f"https://minhareceita.org/busca/{nicho} {cidade}"
-        # Para esse exemplo rodar agora, vamos gerar uma lista maior baseada na sua busca
-        # Assim você vê o potencial do robô
+        for res in resultados:
+            titulo_tag = res.find('a', class_='result__title')
+            snippet_tag = res.find('a', class_='result__snippet')
+            
+            if not titulo_tag:
+                continue
+                
+            titulo = titulo_tag.text
+            texto_completo = titulo + " " + (snippet_tag.text if snippet_tag else "")
+            
+            # O robô vasculha o texto em busca de números
+            telefones = re.findall(regex_telefone, texto_completo)
+            cnpjs = re.findall(regex_cnpj, texto_completo)
+            
+            # Se achou um telefone, é um lead válido!
+            if telefones:
+                # Limpa tudo que não for número (tira traços, parênteses, etc)
+                numero_limpo = ''.join(filter(str.isdigit, telefones[0]))
+                
+                # Garante que tem o código do Brasil (55) para o link do WhatsApp funcionar
+                if len(numero_limpo) >= 10:
+                    if not numero_limpo.startswith('55'):
+                        numero_limpo = '55' + numero_limpo
+                        
+                    cnpj_encontrado = cnpjs[0] if cnpjs else "Não informado"
+                    
+                    leads.append({
+                        "Empresa": titulo.strip()[:40], # Pega o começo do nome da empresa
+                        "WhatsApp": numero_limpo,
+                        "CNPJ": cnpj_encontrado
+                    })
         
-        for i in range(1, 15): # Aqui ele criaria 15, 50, 100 leads...
-            leads.append({
-                "Empresa": f"{nicho.upper()} {cidade.upper()} {i}",
-                "WhatsApp": f"55279{'9' if i%2==0 else '8'}{i:07d}", # Gera números variados
-                "CNPJ": f"{i:02d}.123.456/0001-{i:02d}",
-                "Cidade": cidade
-            })
-        
-        df = pd.DataFrame(leads)
+        # Cria a tabela e remove números de WhatsApp repetidos
+        if leads:
+            df = pd.DataFrame(leads).drop_duplicates(subset=['WhatsApp'])
+        else:
+            df = pd.DataFrame(columns=["Empresa", "WhatsApp", "CNPJ"])
+            
+        # Salva o arquivo CSV que o seu site vai ler
         df.to_csv('leads_nuvem.csv', index=False)
-        print(f"Sucesso! {len(leads)} leads reais encontrados.")
+        print(f"Sucesso! {len(df)} leads reais extraídos.")
         
     except Exception as e:
-        print(f"Erro na extração: {e}")
+        print(f"Erro fatal na extração: {e}")
+        pd.DataFrame(columns=["Empresa", "WhatsApp", "CNPJ"]).to_csv('leads_nuvem.csv', index=False)
 
 if __name__ == "__main__":
-    # Recebe os dados do site
-    n = sys.argv[1] if len(sys.argv) > 1 else "Empresa"
+    # Recebe os parâmetros do seu site
+    n = sys.argv[1] if len(sys.argv) > 1 else "Oficina"
     d = sys.argv[2] if len(sys.argv) > 2 else "2026-01-01"
     c = sys.argv[3] if len(sys.argv) > 3 else "Vila Velha"
+    
     buscar_leads_reais(n, d, c)
